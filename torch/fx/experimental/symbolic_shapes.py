@@ -7044,12 +7044,25 @@ class ShapeEnv:
         args = {str(e): val for e, val in self.backed_var_to_val.items()}
         return eval(code, SYMPY_INTERP, args)
 
+    # Recorded because the placeholders created below mutate self.graph and
+    # name_to_node. compile_fx calls this outside any other event, so without
+    # recording, a replayed ShapeEnv never builds those nodes and check_equal
+    # reports a name_to_node mismatch.
+    @record_shapeenv_event()
     def deserialize_symexpr(self, code: str) -> SymInt | SymFloat | SymBool:
         """
         To be used by compile_fx to deserialize symexprs
         """
         args = {
-            str(e): SymInt(SymNode(e, self, int, int(val), fx_node=None))
+            str(e): SymInt(
+                SymNode(
+                    e,
+                    self,
+                    int,
+                    int(val),
+                    fx_node=self._create_fx_placeholder_and_z3var(e, int),
+                )
+            )
             for e, val in self.backed_var_to_val.items()
         }
         return eval(code, SYMPY_INTERP, args)
