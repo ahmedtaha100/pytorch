@@ -1509,7 +1509,15 @@ class _IterationSpace:
     values: Sequence[sympy.Expr]
 
 
-RemappedRangeValue = CSEVariable | tuple[CSEVariable, ...]
+@dataclasses.dataclass(frozen=True)
+class _ContiguousSubParentRemappedValue:
+    parts: tuple[CSEVariable, ...]
+    parent_extent: sympy.Expr
+
+
+RemappedRangeValue = (
+    CSEVariable | tuple[CSEVariable, ...] | _ContiguousSubParentRemappedValue
+)
 
 
 class _SubParentFusionDecision(NamedTuple):
@@ -1560,11 +1568,23 @@ class _DerivedIterationFamily:
     def resolve_load(self, name: str, index: sympy.Expr) -> CSEVariable | None:
         """The pre-materialized value for ``name``, or None if there is none.
 
-        A tuple entry in ``remapped_values`` is a lane tuple: the parent tile
-        was split into ``len(value)`` lanes, and ``index`` selects one of them
-        as ``index % len(value)``. Non-tuple entries are already the value.
+        Lane tuples select interleaved lanes with ``index % factor``. Contiguous
+        lanes select from the index's constant offset within the parent extent.
+        Non-lane entries are already the value.
         """
         value = self.remapped_values.get(name)
+        if isinstance(value, _ContiguousSubParentRemappedValue):
+            factor = len(value.parts)
+            lane = scheduler.NestedReduction.sub_parent_contiguous_lane(
+                index, factor, value.parent_extent
+            )
+            part = _select_lane(value.parts, lane)
+            if part is None:
+                raise AssertionError(
+                    "sub-parent planner invariant violated: contiguous load "
+                    f"for {name!r} has non-constant lane for index {index}"
+                )
+            return part
         if not isinstance(value, tuple):
             return value
         lane = scheduler.NestedReduction.interleaved_sub_parent_lane(
@@ -2047,27 +2067,40 @@ class _GroupedReductionLayout:
                 elems_per_group=str(FloorDiv(self.local_reduction_size_sym, factor)),
             )
             return True
-        interleaved = scheduler.NestedReduction.SubParentSourceLayout.INTERLEAVED
-        if source_layout is not interleaved:
+        if source_layout is None:
             return False
+        source_layout_kind = scheduler.NestedReduction.SubParentSourceLayout
         sub_parent_tree = family.sub_parent_tree()
         child_block = sub_parent_tree.block_size_str()
         factor_dim = str(factor)
         shape = value.shape
         assert shape is not None  # noqa: S101
-        if len(shape) == 2:
-            passthrough_dim = str(shape[1 - self.parent_axis])
-            reshape_shape = (passthrough_dim, child_block, factor_dim)
-            part_shape = (passthrough_dim, child_block)
-        else:
-            reshape_shape = (child_block, factor_dim)
-            part_shape = (child_block,)
+        # parent_dim() only accepts rank-1/2 tiles.
+        prefix = (str(shape[1 - self.parent_axis]),) if len(shape) == 2 else ()
         parts = tuple(
-            kernel.cse.newvar(dtype=value.dtype, shape=part_shape)
+            kernel.cse.newvar(dtype=value.dtype, shape=(*prefix, child_block))
             for _ in range(factor)
         )
-        kernel.emit_split_via_reshape(value, reshape_shape, tuple(map(str, parts)))
-        family.remapped_values[name] = parts
+        part_names = tuple(map(str, parts))
+        if source_layout is source_layout_kind.CONTIGUOUS:
+            # make_sub_parent_family restricts the grouped parent axis to R,
+            # so any prefix is the unchanged X axis.
+            assert self.parent_axis == 1  # noqa: S101
+            reshape_shape = (*prefix, factor_dim, child_block)
+            permute_dims = (0, 2, 1) if prefix else (1, 0)
+            kernel.emit_split_via_reshape(
+                value, reshape_shape, part_names, permute_dims=permute_dims
+            )
+            family.remapped_values[name] = _ContiguousSubParentRemappedValue(
+                parts,
+                self.local_reduction_size,
+            )
+        else:
+            assert source_layout is source_layout_kind.INTERLEAVED  # noqa: S101
+            kernel.emit_split_via_reshape(
+                value, (*prefix, child_block, factor_dim), part_names
+            )
+            family.remapped_values[name] = parts
         return True
 
     def _broadcast_value_to_axis_resolution(
@@ -3757,13 +3790,11 @@ class SIMDScheduling(BaseScheduling):
         metrics.codegen_nested_reduction += 1
         sub_parent_factor = stage.factor
         parent_rnumel = plan.parent_rnumel
-        # Only min_rblock is a legality constraint: the lanes are derived from
-        # the parent's R axis, so the tile has to hold a whole lane group --
-        # the entire parent row when persistent, and at least one group of
-        # sub_parent_factor when looped, so a group cannot straddle a loop
-        # iteration. There is deliberately no min_xblock here; how many rows a
-        # program should process to amortize the parent-tile load is a
-        # throughput question for the autotuner, not a correctness one.
+        # Persistent codegen splits a resident parent row. Looped codegen
+        # reloads sources in the derived domain; its factor floor aligns
+        # interleaved groups and the derived block, but does not make a whole
+        # contiguous lane resident. There is deliberately no min_xblock here;
+        # row count is a throughput choice for the autotuner.
         kernel.min_rblock = (
             kernel._get_persistent_RBLOCK(parent_rnumel)
             if kernel.persistent_reduction
