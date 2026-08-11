@@ -262,6 +262,10 @@ def {{kernel_name}}_kernel():
             self.assertTrue(torch.allclose(result, expected, atol=1e-5))
 
     @unittest.skipIf(not torch.cuda.is_available(), "CUDA not available")
+    @unittest.skipIf(
+        torch.version.hip is not None,
+        "CuTeDSL kernels require an NVIDIA driver",
+    )
     def test_cutedsl_add_e2e_autotune(self):
         """E2E test with multiple CuteDSL template variants for autotuning."""
         from torch._inductor.ir import TensorBox

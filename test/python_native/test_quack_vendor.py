@@ -42,6 +42,13 @@ class TestQuackVendor(TestCase):
         trace_context.e("noop")
         trace_context.flush()
 
+    # Extra guard on top of the class-level one: that covers CUTLASS, but
+    # this test also reaches quack.autotuner, which imports triton. Not
+    # every env with the DSL wheel has triton, so check it separately.
+    @unittest.skipIf(
+        importlib.util.find_spec("triton") is None,
+        "quack autotuner imports triton",
+    )
     def test_precompile_serializes_rmsnorm_tuned_tensor_kwargs(self):
         import torch
         from torch._vendor.quack.autotuner import AutotuneConfig
