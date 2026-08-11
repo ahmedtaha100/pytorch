@@ -6565,6 +6565,67 @@ class Scheduler:
         if window:
             yield window
 
+    def _combo_shared_where_origins(
+        self, node: BaseSchedulerNode
+    ) -> frozenset[torch.fx.Node]:
+        """Find data-independent where origins rematerialized by this producer."""
+        if node.read_writes.reads:
+            return frozenset()
+
+        origins = OrderedSet[torch.fx.Node]()
+        for output in node.get_outputs():
+            buf = output.node
+            if not isinstance(buf, ComputedBuffer) or not isinstance(
+                buf.data, Pointwise
+            ):
+                return frozenset()
+            origins.update(
+                origin
+                for origin in buf.get_origins()
+                if origin.op == "call_function"
+                and origin.target is torch.ops.aten.where.self
+            )
+        return frozenset(origins)
+
+    def _combo_canonical_consumers(
+        self, node: BaseSchedulerNode
+    ) -> frozenset[BaseSchedulerNode]:
+        consumers = OrderedSet[BaseSchedulerNode]()
+        for output in node.get_outputs():
+            for user in output.users:
+                if user.is_weak or not isinstance(user.node, BaseSchedulerNode):
+                    continue
+                consumer = self.get_fused_node(user.node)
+                if consumer is not node:
+                    consumers.add(consumer)
+        return frozenset(consumers)
+
+    def _combo_cse_locality_exclusions(
+        self, members: list[BaseSchedulerNode]
+    ) -> OrderedSet[BaseSchedulerNode]:
+        """Keep copies of a shared where local to their different consumers."""
+        origin_groups: dict[torch.fx.Node, list[BaseSchedulerNode]] = defaultdict(list)
+        for node in members:
+            for origin in self._combo_shared_where_origins(node):
+                origin_groups[origin].append(node)
+
+        excluded = OrderedSet[BaseSchedulerNode]()
+        for nodes in origin_groups.values():
+            if len(nodes) < 2:
+                continue
+            consumers = OrderedSet(
+                self._combo_canonical_consumers(node) for node in nodes
+            )
+            if len(consumers) > 1:
+                excluded.update(nodes)
+        if excluded:
+            fusion_log.debug(
+                "ComboKernels: excluding %d CSE-rematerialized producers "
+                "with different consumers",
+                len(excluded),
+            )
+        return excluded
+
     def create_combo_kernel_nodes(self, num_ck_nodes: int | None = None) -> None:
         """Group parallel nodes into combo kernels.
 
@@ -6644,14 +6705,16 @@ class Scheduler:
             ):
                 if num_ck_nodes is not None and count > num_ck_nodes:
                     break
-                if len(window) < 2 or not self.speedup_by_combo_kernel(window):
+                excluded = self._combo_cse_locality_exclusions(window)
+                candidate = [node for node in window if node not in excluded]
+                if len(candidate) < 2 or not self.speedup_by_combo_kernel(candidate):
                     continue
                 if memory_check:
                     if mem_ctx is None:
                         raise AssertionError("expected mem_ctx to be set")
                     sim_start = time.perf_counter()
                     self._try_combo_with_halving(
-                        window,
+                        candidate,
                         num,
                         mem_ctx,
                         enable_autotune=enable_autotune,
@@ -6660,13 +6723,13 @@ class Scheduler:
                     memory_sim_time += time.perf_counter() - sim_start
                 else:
                     combo_node = ForeachKernelSchedulerNode(
-                        window[0].scheduler,
-                        window,
+                        candidate[0].scheduler,
+                        candidate,
                         use_custom_partition_algo=True,
                         enable_autotune=enable_autotune,
                         per_subkernel_blocks=config.combo_kernel_per_subkernel_blocks,
                     )
-                    _register_accept(combo_node, window, num)
+                    _register_accept(combo_node, candidate, num)
 
         self.nodes = sorted(fused_nodes, key=output_order.__getitem__)
         self.nodes = self.topological_sort_schedule(self.nodes)

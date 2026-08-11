@@ -67,7 +67,7 @@ from .group_batch_fusion import group_batch_fusion_passes, POST_GRAD_FUSIONS
 from .micro_pipeline_tp import micro_pipeline_tp_pass
 from .pre_grad import is_same_dict, save_inductor_dict
 from .reduced_atomic_contention import partitioned_scatter_optimization_pass
-from .reinplace import reinplace_inplaceable_ops
+from .reinplace import META_ONLY_OPS, reinplace_inplaceable_ops
 from .split_cat import POST_GRAD_PATTERNS
 
 
@@ -161,6 +161,77 @@ def reject_current_device_nodes(graph: torch.fx.Graph) -> None:
             "coor::current_device node that inductor cannot lower). Use a non-inductor "
             "backend (e.g. aot_eager) or disable compile_on_one_rank."
         )
+
+
+def _cse_repeated_gpu_wheres(gm: torch.fx.GraphModule) -> None:
+    """CSE the data-independent producer slices of repeated GPU wheres."""
+    where = aten.where.self
+    candidates = [
+        node
+        for node in gm.graph.find_nodes(op="call_function", target=where)
+        if isinstance((value := node.meta.get("val")), torch.Tensor)
+        and is_gpu(value.device.type)
+    ]
+    if len(candidates) < 2:
+        return
+
+    functional_mutations = (
+        torch.ops.higher_order.auto_functionalized,
+        torch.ops.higher_order.auto_functionalized_v2,
+        torch.ops.higher_order.triton_kernel_wrapper_functional,
+    )
+    mutation_aliases = OrderedSet[torch.fx.Node]()
+    for mutation in (
+        node
+        for node in gm.graph.nodes
+        if pattern_matcher.is_mutation_op(node) or node.target in functional_mutations
+    ):
+        stack = list(mutation.all_input_nodes)
+        while stack:
+            node = stack.pop()
+            if node in mutation_aliases:
+                continue
+            mutation_aliases.add(node)
+            storage = get_node_storage(node)
+            if storage is not None:
+                stack.extend(
+                    input_node
+                    for input_node in node.all_input_nodes
+                    if get_node_storage(input_node) == storage
+                )
+
+    tensor_data_dependent = OrderedSet[torch.fx.Node]()
+    for node in gm.graph.nodes:
+        if node in mutation_aliases or (
+            node.op in ("placeholder", "get_attr")
+            and isinstance(node.meta.get("val"), torch.Tensor)
+        ):
+            tensor_data_dependent.add(node)
+        elif node.op == "call_function" and node.target in META_ONLY_OPS:
+            continue
+        elif any(arg in tensor_data_dependent for arg in node.all_input_nodes):
+            tensor_data_dependent.add(node)
+
+    cse_nodes = OrderedSet[torch.fx.Node]()
+    for candidate in candidates:
+        if candidate in tensor_data_dependent:
+            continue
+        stack = [candidate]
+        while stack:
+            node = stack.pop()
+            if node in cse_nodes or node in tensor_data_dependent:
+                continue
+            cse_nodes.add(node)
+            stack.extend(node.all_input_nodes)
+    if sum(candidate in cse_nodes for candidate in candidates) < 2:
+        return
+
+    from torch._functorch.compile_utils import fx_graph_cse
+
+    gm.graph = fx_graph_cse(
+        gm.graph,
+        extra_node_key=lambda node: None if node in cse_nodes else node,
+    )
 
 
 def post_grad_passes(gm: torch.fx.GraphModule, is_inference: bool):
@@ -446,6 +517,11 @@ def post_grad_passes(gm: torch.fx.GraphModule, is_inference: bool):
         GraphTransformObserver(
             gm, "replace_collectives_with_low_contention"
         ).apply_graph_pass(replace_collectives_with_low_contention)
+
+    if config.combo_kernels:
+        GraphTransformObserver(gm, "cse_repeated_gpu_wheres").apply_gm_pass(
+            _cse_repeated_gpu_wheres
+        )
 
     # Keep these last, since they introduce mutation. Look at
     # ./fx_passes/README.md for a discussion of mutation invariants.
