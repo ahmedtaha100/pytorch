@@ -184,11 +184,19 @@ class BaseListVariable(VariableTracker):
         if pyindex_check(maybe_get_python_type(arg)):
             index = pynumber_as_ssize_t(tx, arg).as_python_constant()
             try:
-                return self.items[index]
+                item = self.items[index]
             except IndexError:
                 raise_observed_exception(
                     IndexError, tx, args=["list index out of range"]
                 )
+            regions = tx.output.deferred_index_regions
+            if regions and item.source is not None:
+                # This read did not defer an index guard, so the element must
+                # keep the identity it traced with even if a deferred subscript
+                # of the same container would otherwise move it. See Note:
+                # [invoke_subgraph index parameterization].
+                regions[-1].literal_elements.add(item.source)
+            return item
         elif pyslice_check(arg):
             if not isinstance(arg, SliceVariable):
                 raise AssertionError("Expected arg to be a SliceVariable")

@@ -192,6 +192,7 @@ if TYPE_CHECKING:
     from torch._dynamo.package import CompilePackage
     from torch._dynamo.symbolic_convert import InstructionTranslatorBase
     from torch._dynamo.variables.functions import LocalGeneratorObjectVariable
+    from torch._dynamo.variables.invoke_subgraph import open_index_parameterized_region
     from torch._inductor import _CudagraphAnnotation
     from torch.multiprocessing.reductions import StorageWeakRef
 
@@ -956,7 +957,7 @@ class OutputGraph(OutputGraphCommon):
         # whose guard is deferred until the region closes. See Note:
         # [invoke_subgraph index parameterization] in
         # torch/_dynamo/variables/invoke_subgraph.py.
-        self.deferred_index_regions: list[list[Any]] = []
+        self.deferred_index_regions: list[open_index_parameterized_region] = []
 
         # Use to pass values to backward hooks when using compiled autograd
         self.backward_state: dict[str, VariableTracker] = {}
