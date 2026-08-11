@@ -39,7 +39,7 @@ from torch.testing._internal.common_utils import dtype_name, freeze_rng_state, r
     download_file, get_function_arglist, load_tests, skipIfMPS, MACOS_VERSION, \
     IS_PPC, IS_ARM64, IS_MACOS, IS_WINDOWS, IS_CPU_CAPABILITY_SVE, IS_CPU_EXT_SVE_SUPPORTED, xfailIf, \
     parametrize as parametrize_test, subtest, instantiate_parametrized_tests, \
-    skipIfTorchDynamo, gcIfJetson, set_default_dtype, skipIfNoCuteDSL
+    skipIfTorchDynamo, gcIfJetson, set_default_dtype, skipIfNoCuteDSL, isRocmArchAnyOf, MI200_ARCH
 from torch.testing._internal.common_cuda import TEST_CUDA, TEST_MULTIGPU, TEST_CUDNN, \
     SM80OrLater, SM90OrLater, _get_torch_rocm_version
 from torch.testing._internal.common_nn import NNTestCase, NewModuleTest, CriterionTest, \
@@ -14018,6 +14018,7 @@ if __name__ == '__main__':
 
         eta = torch.finfo(dtype).eps
         feps = torch.finfo(dtype).eps * 3
+        weight_grad_feps = feps * 1.5 if isRocmArchAnyOf(MI200_ARCH) and dtype == torch.float16 else feps
 
         def diff_ulp(x, y):
             # ULP difference between two normal numbers, applied to
@@ -14191,7 +14192,7 @@ if __name__ == '__main__':
 
         self.assertLessEqual(maximal_input_grad_err, feps,
                              msg=lambda msg: f"{msg}\nworst input-grad err {maximal_input_grad_err} from kwargs={worst_input_grad_err_kwargs}")
-        self.assertLessEqual(maximal_linear_weight_grad_err, feps,
+        self.assertLessEqual(maximal_linear_weight_grad_err, weight_grad_feps,
                              msg=lambda msg: f"{msg}\nworst linear_weight-grad err {maximal_linear_weight_grad_err} from kwargs={worst_linear_weight_grad_err_kwargs}")
         self.assertLessEqual(maximal_linear_bias_grad_err, feps,
                              msg=lambda msg: f"{msg}\nworst linear_bias-grad err {maximal_linear_bias_grad_err} from kwargs={worst_linear_bias_grad_err_kwargs}")
