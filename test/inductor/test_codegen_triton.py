@@ -199,6 +199,7 @@ def helper(x):
         self.assertEqual(seen_scores, [tiling_scores])
 
     def test_reduction_invariant_load_indexing(self):
+        self._stack.enter_context(self._graph.set_current_device(torch.device("cuda")))
         xnumel = sympy.Integer(65)
         rnumel = sympy.Integer(65)
         kernel = TritonKernel(
@@ -252,6 +253,7 @@ def helper(x):
             self.assertTrue(predicate_options.reduction_axes_omitted)
 
     def test_reduction_invariant_load_indexing_extents(self):
+        self._stack.enter_context(self._graph.set_current_device(torch.device("cuda")))
         xnumel = sympy.Integer(65)
         rnumel = sympy.Integer(65)
         kernel = TritonKernel(
@@ -333,6 +335,7 @@ def helper(x):
                     self.assertFalse(no_x_indexing().reduction_axes_omitted)
 
     def test_reduction_invariant_load_indexing_unknown_mask(self):
+        self._stack.enter_context(self._graph.set_current_device(torch.device("cuda")))
         xnumel = sympy.Integer(65)
         rnumel = sympy.Integer(65)
         kernel = TritonKernel(
@@ -371,6 +374,7 @@ def helper(x):
             )
 
     def test_reduction_invariant_load_indexing_schedule_guards(self):
+        self._stack.enter_context(self._graph.set_current_device(torch.device("cuda")))
         xnumel = sympy.Integer(65)
         rnumel = sympy.Integer(65)
         kernel = TritonKernel(
@@ -467,6 +471,75 @@ def helper(x):
         self.assertFalse(options.reduction_axes_omitted)
         self.assertEqual(options.expand_shape, ("XBLOCK", "R0_BLOCK"))
         self.assertIn(override_mask, options.mask_vars)
+
+    def test_reduction_invariant_indexing_consumers(self):
+        xnumel = sympy.Integer(65)
+        rnumel = sympy.Integer(65)
+
+        for device_type, expected_shape in (
+            ("cuda", ("XBLOCK", "1")),
+            ("cpu", ("XBLOCK", "R0_BLOCK")),
+            (None, ("XBLOCK", "R0_BLOCK")),
+        ):
+            with self.subTest(device_type=device_type):
+                kernel = TritonKernel(
+                    {"x": xnumel, "r0_": rnumel},
+                    features=SIMDKernelFeatures([], xnumel, rnumel),
+                    override_persistent_reduction=False,
+                    override_cooperative_reduction=False,
+                )
+                scalar_mask = TritonCSEVariable(
+                    "tmp0", ValueRanges.unknown(), torch.bool, shape=("1", "1")
+                )
+                device_context = (
+                    self._graph.set_current_device(torch.device(device_type))
+                    if device_type is not None
+                    else contextlib.nullcontext()
+                )
+
+                with (
+                    device_context,
+                    V.set_kernel_handler(kernel),
+                    patch.object(kernel, "_load_mask", scalar_mask),
+                ):
+                    x_tree, r_tree = kernel.range_trees
+                    x_index = x_tree.full_range().symbol()
+                    r_index = r_tree.full_range().symbol()
+                    x_value = TritonKernelOverrides.index_expr(x_index, torch.int64)
+                    with patch.object(
+                        kernel,
+                        "indirect_assert",
+                        wraps=kernel.indirect_assert,
+                    ) as x_indirect_assert:
+                        kernel.check_bounds(x_index, xnumel, lower=True, upper=True)
+                    r_value = TritonKernelOverrides.index_expr(r_index, torch.int64)
+                    with patch.object(
+                        kernel,
+                        "indirect_assert",
+                        wraps=kernel.indirect_assert,
+                    ) as r_indirect_assert:
+                        kernel.check_bounds(r_index, rnumel, lower=True, upper=True)
+
+                self.assertEqual(expected_shape, tuple(map(str, x_value.shape or ())))
+                self.assertIn(
+                    "[" + ", ".join(expected_shape) + "]",
+                    x_indirect_assert.call_args.args[0],
+                )
+                x_bounds_mask = x_indirect_assert.call_args.args[3]
+                self.assertIsInstance(x_bounds_mask, str)
+                if device_type == "cuda":
+                    self.assertNotIn(r_tree.mask_name(), x_bounds_mask)
+                else:
+                    self.assertIn(r_tree.mask_name(), x_bounds_mask)
+                dense_shape = ("XBLOCK", "R0_BLOCK")
+                self.assertEqual(dense_shape, tuple(map(str, r_value.shape or ())))
+                self.assertIn(
+                    "[" + ", ".join(dense_shape) + "]",
+                    r_indirect_assert.call_args.args[0],
+                )
+                r_bounds_mask = r_indirect_assert.call_args.args[3]
+                self.assertIsInstance(r_bounds_mask, str)
+                self.assertIn(r_tree.mask_name(), r_bounds_mask)
 
     @inductor_config.patch("triton.divisible_by_16", True)
     def test_config_of_sizearg(self):

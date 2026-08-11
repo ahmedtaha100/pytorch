@@ -2471,7 +2471,10 @@ class TritonKernelOverrides(TritonOverrides):
     def index_expr(cls, expr, dtype):
         expr = _materialize_trunc_to_float_expr(expr, dtype)
         indexing = V.kernel.indexing(
-            expr, block_ptr=False, tma_compatibility_checker=None
+            expr,
+            block_ptr=False,
+            tma_compatibility_checker=None,
+            allow_reduction_invariant_indexing=True,
         )
         if not isinstance(indexing, IndexingOptions):
             raise AssertionError(f"expected IndexingOptions, got {type(indexing)}")
@@ -4516,7 +4519,14 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
 
         if not isinstance(expr, sympy.Expr):
             raise AssertionError(f"expected sympy.Expr, got {type(expr)}")
-        indexing = self.indexing(expr, block_ptr=False, tma_compatibility_checker=None)
+        indexing = self.indexing(
+            expr,
+            block_ptr=False,
+            tma_compatibility_checker=None,
+            # Positive-extent guards make the dense bounds check equivalent to
+            # broadcasting the narrow check across any omitted axes.
+            allow_reduction_invariant_indexing=True,
+        )
         if not isinstance(indexing, IndexingOptions):
             raise AssertionError(f"expected IndexingOptions, got {type(indexing)}")
 
@@ -4599,6 +4609,12 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
         if not self.inside_reduction or load_mask is None:
             return None
 
+        # Lane-shape changes are currently qualified only on CUDA and ROCm.
+        # Other Triton backends retain dense indexing until they are covered.
+        device = V.graph.current_device
+        if device is None or device.type != "cuda":
+            return None
+
         # These schedules introduce coordinate scopes outside the block shape
         # tracked by this proof.
         if self.cooperative_reduction or self.mix_order_reduction:
@@ -4645,7 +4661,10 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
                 return None
             omitted_reduction = True
 
-        return tuple(shape) if omitted_reduction else None
+        if not omitted_reduction:
+            return None
+
+        return tuple(shape)
 
     GDC_WAIT = "tl.extra.cuda.gdc_wait()"
     GDC_LAUNCH = "tl.extra.cuda.gdc_launch_dependents()"
@@ -4907,11 +4926,7 @@ class TritonKernel(SIMDKernel[TritonCSEVariable]):
             index,
             block_ptr=True,
             tma_compatibility_checker=tma_checker,
-            # Lane-shape changes are currently qualified only on CUDA and ROCm.
-            # Other Triton backends retain dense indexing until they are covered.
-            allow_reduction_invariant_indexing=(
-                V.graph.get_current_device_or_throw().type == "cuda"
-            ),
+            allow_reduction_invariant_indexing=True,
         )
 
         if isinstance(indexing, IndexingOptions):
