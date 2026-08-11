@@ -2150,6 +2150,19 @@ def native_batch_norm_helper(
     if input.device.type == "cpu":
         save_mean = save_mean.to(dtype=input.dtype)
         save_rstd = save_rstd.to(dtype=input.dtype)
+        # batch_norm_cpu always allocates a format-contiguous output
+        # (Normalization.cpp), while other backends preserve the input layout
+        # via empty_like; without this the fake/meta output keeps arbitrary
+        # input strides that eager CPU does not produce (#192668).
+        if input.is_contiguous():
+            memory_format = torch.contiguous_format
+        elif input.is_contiguous(memory_format=torch.channels_last_3d):
+            memory_format = torch.channels_last_3d
+        elif input.is_contiguous(memory_format=torch.channels_last):
+            memory_format = torch.channels_last
+        else:
+            memory_format = utils.suggest_memory_format(input)
+        output = output.contiguous(memory_format=memory_format)
     return (
         output.to(dtype=input.dtype),
         save_mean,
