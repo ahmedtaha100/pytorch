@@ -16,7 +16,7 @@ from torch._inductor.exc import CUDACompileError, XPUCompileError
 from torch._inductor.test_case import TestCase as InductorTestCase
 from torch._inductor.utils import fresh_cache
 from torch.testing._internal.common_device_type import instantiate_device_type_tests
-from torch.testing._internal.common_utils import TEST_WITH_ROCM
+from torch.testing._internal.common_utils import HardwareClassification, TEST_WITH_ROCM
 from torch.testing._internal.triton_utils import (
     requires_gpu_and_triton,
     requires_xpu_and_triton,
@@ -120,6 +120,8 @@ def _call_saxpy(dll, device_type, n, a, x, y):
 
 
 class TestGPUCodeCache(InductorTestCase):
+    hw_classification = HardwareClassification.ACCELERATOR
+
     @requires_gpu_and_triton
     def test_gpu_load(self):
         device = self.device_type
@@ -196,6 +198,8 @@ instantiate_device_type_tests(
 
 @requires_xpu_and_triton
 class TestXPUCodeCacheClear(InductorTestCase):
+    hw_classification = HardwareClassification.XPU
+
     def test_cache_hit(self):
         if not icpx_exist(_sycl_compiler()):
             raise unittest.SkipTest("requires SYCL compiler")

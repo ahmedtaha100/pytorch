@@ -16,6 +16,7 @@ from torch._inductor.utils import try_import_ck_lib
 from torch.testing import FileCheck
 from torch.testing._internal.common_cuda import tf32_off
 from torch.testing._internal.common_utils import (
+    HardwareClassification,
     instantiate_parametrized_tests,
     parametrize,
 )
@@ -39,6 +40,8 @@ _test_env = {}
 
 @instantiate_parametrized_tests
 class TestCKBackend(TestCase):
+    hw_classification = HardwareClassification.CUDA
+
     def setUp(self):
         # The new inductor cache refresh mechanism
         # introduced with https://github.com/pytorch/pytorch/pull/122661
