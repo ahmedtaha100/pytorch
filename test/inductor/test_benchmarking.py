@@ -18,6 +18,7 @@ from torch._inductor.runtime.benchmarking import (
 )
 from torch._inductor.test_case import run_tests, TestCase
 from torch.testing._internal.common_utils import (
+    HardwareClassification,
     decorateIf,
     instantiate_parametrized_tests,
     parametrize,
@@ -33,6 +34,8 @@ ALL_BENCHMARKER_CLASSES = (
 
 @instantiate_parametrized_tests
 class TestBenchmarker(TestCase):
+    hw_classification = HardwareClassification.ACCELERATOR
+
     def setUp(self):
         super().setUp()
         torch.manual_seed(12345)

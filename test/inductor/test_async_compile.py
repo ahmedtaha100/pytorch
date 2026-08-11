@@ -23,6 +23,7 @@ from torch._inductor.runtime.triton_heuristics import (
 from torch._inductor.test_case import run_tests, TestCase
 from torch._inductor.utils import ensure_nv_universal_gemm_available, fresh_cache
 from torch.testing._internal.common_utils import (
+    HardwareClassification,
     instantiate_parametrized_tests,
     parametrize,
     skipIfNoCuteDSL,
@@ -96,6 +97,8 @@ def {{kernel_name}}_precompile(precompile_shapes, precompile_strides=None,
 
 
 class TestNVGemmPickling(TestCase):
+    hw_classification = HardwareClassification.CUDA
+
     @unittest.skipIf(
         not ensure_nv_universal_gemm_available(),
         "NVIDIA Universal GEMM (cutlass_api) library not available",
@@ -164,6 +167,8 @@ def _forked_daemon_compile_worker(q):
 
 @instantiate_parametrized_tests
 class TestAsyncCompile(TestCase):
+    hw_classification = HardwareClassification.ACCELERATOR
+
     def _run_daemon_compile_worker(self, worker_start_method):
         ctx = multiprocessing.get_context("spawn")
         q = ctx.Queue()
@@ -452,6 +457,8 @@ def triton_fused_fake_name(in_ptr0, out_ptr0, xnumel, r0_numel, XBLOCK : tl.cons
 
 @skipIfNoCuteDSL
 class TestCuteDSLSubprocessCompile(TestCase):
+    hw_classification = HardwareClassification.CUDA
+
     def _compile_and_run_add(self, template_name):
         """Compile a CuteDSL add kernel via torch.compile and verify correctness."""
         from torch._inductor.codegen.cutedsl.cutedsl_template import CuteDSLTemplate
@@ -2148,6 +2155,7 @@ class TestCuteDSLSubprocessGroupedGemm(TestCase):
     Exercises the full path: CuTe DSL template selection -> codegen ->
     subprocess compilation -> precompile metadata -> disk cache -> correctness.
     """
+    hw_classification = HardwareClassification.CUDA
 
     def test_grouped_gemm_subprocess_e2e(self):
         shutdown_compile_workers()

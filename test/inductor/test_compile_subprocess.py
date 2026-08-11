@@ -19,6 +19,7 @@ from torch._inductor.compile_fx import _InProcessFxCompile, FxCompile, FxCompile
 from torch._inductor.graph import GraphLowering
 from torch._inductor.test_case import TestCase
 from torch.testing._internal.common_utils import (
+    HardwareClassification,
     IS_CI,
     IS_WINDOWS,
     isRocmArchAnyOf,
@@ -271,6 +272,7 @@ class TestSubprocess(TestCase):
 if RUN_CPU:
 
     class CpuTests(TestSubprocess):
+        hw_classification = HardwareClassification.CPU
         common = check_model
         device = "cpu"
 
@@ -281,6 +283,7 @@ if RUN_CPU:
 if RUN_GPU and not TEST_WITH_ASAN:
 
     class GPUTests(TestSubprocess):
+        hw_classification = HardwareClassification.ACCELERATOR
         common = check_model_gpu
         device = GPU_TYPE
 

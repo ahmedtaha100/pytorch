@@ -36,6 +36,7 @@ from torch.fx.immutable_collections import immutable_dict
 from torch.testing import FileCheck
 from torch.testing._internal.common_cuda import blas_library_context, TEST_MULTIGPU
 from torch.testing._internal.common_utils import (
+    HardwareClassification,
     instantiate_parametrized_tests,
     IS_ARM64,
     IS_CI,
@@ -121,6 +122,7 @@ def cdata(t):
 
 
 class TestCase(InductorTestCase):
+    hw_classification = HardwareClassification.CUDA
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -151,6 +153,7 @@ class TestCase(InductorTestCase):
 
 
 class CUDAGraphAPIOnlyTests(TestCase):
+    hw_classification = HardwareClassification.CUDA
     def test_mark_warmup_incomplete_without_cudagraphs(self):
         cudagraph_trees = torch._inductor.cudagraph_trees
         containers = cudagraph_trees.get_obj(
@@ -182,6 +185,7 @@ if HAS_CUDA_AND_TRITON:
         return len(all_live_blocks())
 
     class CudaGraphTreeTests(TestCase):
+        hw_classification = HardwareClassification.CUDA
         def setUp(self):
             super().setUp()
             self.graph_stack = contextlib.ExitStack()
@@ -6154,6 +6158,7 @@ if HAS_CUDA_AND_TRITON:
             self.assertEqual(result2[0], inp * 3.0)
 
     class TestCUDAGraphPolicy(TestCase):
+        hw_classification = HardwareClassification.CUDA
         def setUp(self):
             super().setUp()
             counters.clear()
@@ -6345,6 +6350,7 @@ if HAS_CUDA_AND_TRITON:
             self.assertGreater(len(wrap_calls), 0)
 
     class TestSAC(TestCase):
+        hw_classification = HardwareClassification.CUDA
         def _make_observer_mode(self):
             class ObserverMode(TorchDispatchMode):
                 def __init__(self):
