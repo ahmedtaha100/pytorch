@@ -636,6 +636,56 @@ _stream_fn_to_variable_cls: dict[object, type[StreamVariable]] = {
 }
 
 
+def _register_privateuse1_stream_variable_cls() -> None:
+    """Register a StreamVariable subclass for the active PrivateUse1 backend.
+
+    Called lazily (not at module import) because a PrivateUse1 backend such as
+    torch_npu may not be loaded/registered yet when this module is first
+    imported during torch startup. Mirroring CudaStreamVariable /
+    XpuStreamVariable, this lets tracing torch.<backend>.current_stream keep
+    the backend-specific Python type while still carrying user_object_index.
+
+    Best-effort: if the backend module is absent or exposes no current_stream,
+    this is a no-op and tracing falls back to the generic StreamVariable (which
+    is sufficient to fix downstream stream ops such as streams::wait_stream).
+    When no PrivateUse1 backend is registered the name defaults to
+    "privateuseone", which has no torch.<name> module and is skipped below.
+    """
+    backend = torch._C._get_privateuse1_backend_name()
+    if not backend:
+        return
+    module = getattr(torch, backend, None)
+    current_stream = getattr(module, "current_stream", None)
+    if current_stream is None or current_stream in _stream_fn_to_variable_cls:
+        return
+
+    stream_cls = getattr(module, "Stream", None)
+    attr = f"{backend}_stream"
+    var_cls: type[StreamVariable] = StreamVariable
+    if stream_cls is not None:
+        # Only attach the backend handle attribute if it actually exists so a
+        # wrong guess never masks legitimate attribute access on the variable.
+        if hasattr(stream_cls, attr):
+            var_cls = type(
+                f"{backend.capitalize()}StreamVariable",
+                (StreamVariable,),
+                {
+                    "_cpython_type": stream_cls,
+                    "_device_handle_attr": attr,
+                    "tp_getset": {
+                        attr: GetSet(StreamVariable._stream_device_handle_get, None)
+                    },
+                },
+            )
+        else:
+            var_cls = type(
+                f"{backend.capitalize()}StreamVariable",
+                (StreamVariable,),
+                {"_cpython_type": stream_cls},
+            )
+    _stream_fn_to_variable_cls[current_stream] = var_cls
+
+
 def _get_stream_variable_cls(stream_fn: object) -> type[StreamVariable] | None:
     return _stream_fn_to_variable_cls.get(stream_fn)
 

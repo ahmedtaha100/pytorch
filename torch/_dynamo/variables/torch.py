@@ -2601,6 +2601,44 @@ class TorchInGraphFunctionVariable(BaseTorchVariable):
                     from_exc=e,
                 )
 
+        # Dynamic registration for PrivateUse1 backends (e.g. torch_npu).
+        #
+        # handle_current_stream is fully device-agnostic -- it only resolves
+        # the device via torch.device() and delegates to
+        # SymbolicStreamState.cur_stream(), which dispatches on device.type
+        # internally. It is therefore correct for ANY accelerator, not just
+        # CUDA/XPU.
+        #
+        # However, the @register decorator above hardcodes only
+        # torch.accelerator/cuda/xpu.current_stream. A PrivateUse1 backend
+        # (such as torch_npu, whose torch.npu module cannot be imported by
+        # upstream PyTorch) is invisible to the compiled-streams path by
+        # default: torch.npu.current_stream is not in the handler table, so
+        # tracing it falls back to the generic call path and returns a
+        # StreamVariable without user_object_index. Downstream,
+        # streams::wait_stream(None) then fails with a type error.
+        #
+        # Since PrivateUse1 backend names are only known at runtime, register
+        # the backend's current_stream onto the same handle_current_stream
+        # handler here instead of hardcoding any backend. When no PrivateUse1
+        # backend is registered the name defaults to "privateuseone", which has
+        # no torch.<name> module, so this whole block is a no-op.
+        _privateuse1_backend = torch._C._get_privateuse1_backend_name()
+        if _privateuse1_backend:
+            _p1_module = getattr(torch, _privateuse1_backend, None)
+            _p1_current_stream = getattr(_p1_module, "current_stream", None)
+            if (
+                _p1_current_stream is not None
+                and _p1_current_stream not in handlers
+            ):
+                handlers[_p1_current_stream] = handle_current_stream
+            # Also make the optional StreamVariable subclass mapping available
+            # so handle_current_stream can preserve the backend-specific
+            # stream type (see streams._register_privateuse1_stream_variable_cls).
+            from .streams import _register_privateuse1_stream_variable_cls
+
+            _register_privateuse1_stream_variable_cls()
+
         _synchronize_fn_to_device_type = {
             torch.cuda.synchronize: "cuda",
             torch.xpu.synchronize: "xpu",

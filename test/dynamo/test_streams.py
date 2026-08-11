@@ -327,6 +327,54 @@ class <lambda>(torch.nn.Module):
         compiled = torch.compile(fn, backend="eager", fullgraph=True)
         self.assertEqual(compiled(x, s), fn(x, s))
 
+    def test_privateuse1_current_stream_handler_registration(self):
+        """A PrivateUse1 backend's current_stream is dynamically registered
+        onto the device-agnostic handle_current_stream handler and gets a
+        backend-specific StreamVariable subclass (no hardware required)."""
+        import types
+
+        from torch._dynamo.variables import streams as streams_vars
+        from torch._dynamo.variables.torch import TorchInGraphFunctionVariable
+
+        class FakeP1Stream:
+            fakep1_stream = None
+
+        def fake_current_stream(device=None):
+            raise AssertionError("should not be called in this test")
+
+        fake_module = types.SimpleNamespace(
+            current_stream=fake_current_stream, Stream=FakeP1Stream
+        )
+
+        get_handlers = TorchInGraphFunctionVariable._get_handlers
+        with (
+            patch.object(
+                torch._C, "_get_privateuse1_backend_name", return_value="fakep1"
+            ),
+            patch.object(torch, "fakep1", fake_module, create=True),
+        ):
+            get_handlers.cache_clear()
+            try:
+                handlers = get_handlers()
+                # same device-agnostic handler as torch.cuda.current_stream
+                self.assertIs(
+                    handlers.get(fake_current_stream),
+                    handlers[torch.cuda.current_stream],
+                )
+                var_cls = streams_vars._stream_fn_to_variable_cls.get(
+                    fake_current_stream
+                )
+                self.assertIsNotNone(var_cls)
+                self.assertTrue(issubclass(var_cls, streams_vars.StreamVariable))
+                self.assertIs(var_cls._cpython_type, FakeP1Stream)
+                self.assertEqual(var_cls._device_handle_attr, "fakep1_stream")
+                self.assertIn("fakep1_stream", var_cls.tp_getset)
+            finally:
+                streams_vars._stream_fn_to_variable_cls.pop(
+                    fake_current_stream, None
+                )
+                get_handlers.cache_clear()
+
     @requires_cuda
     def test_nested_stream_enter_exit(self):
         def fn(x, y, s0, s1, s2):
