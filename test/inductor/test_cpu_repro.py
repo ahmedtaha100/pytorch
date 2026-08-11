@@ -29,6 +29,7 @@ from torch.fx.experimental.proxy_tensor import make_fx
 from torch.nn import functional as F
 from torch.testing._internal.common_utils import (
     get_gcc_major_version,
+    HardwareClassification,
     instantiate_parametrized_tests,
     IS_ARM64,
     IS_CI,
@@ -143,6 +144,8 @@ class LstmModule(torch.nn.Module):
 
 @instantiate_parametrized_tests
 class CPUReproTests(TestCase):
+    hw_classification = HardwareClassification.CPU
+
     common = check_model
 
     @skipIfNoLapack

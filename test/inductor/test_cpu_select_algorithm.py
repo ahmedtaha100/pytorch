@@ -28,6 +28,7 @@ from torch.testing._internal.common_quantized import (
     _calculate_dynamic_per_channel_qparams,
 )
 from torch.testing._internal.common_utils import (
+    HardwareClassification,
     IS_ARM64,
     IS_CPU_EXT_SVE_SUPPORTED,
     IS_MACOS,
@@ -150,6 +151,8 @@ def _get_epilogue(epilogue: str, other: torch.Tensor | None = None):
 
 
 class BaseTestSelectAlgorithm(TestCase):
+    hw_classification = HardwareClassification.CPU
+
     def _check_amx_counter(self, vec_amx):
         if vec_amx:
             self.assertTrue(counters["inductor"]["cpp_micro_gemm_amx_counter"] > 0)

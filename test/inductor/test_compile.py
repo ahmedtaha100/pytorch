@@ -23,6 +23,7 @@ from torch._inductor.test_case import run_tests, TestCase
 from torch._inductor.utils import gen_gm_and_inputs
 from torch.fx import symbolic_trace
 from torch.fx.experimental.proxy_tensor import make_fx
+from torch.testing._internal.common_utils import HardwareClassification
 from torch.testing._internal.inductor_utils import HAS_CPU
 
 
@@ -74,6 +75,7 @@ class TestStandaloneInductor(TestCase):
     These test check that you can call TorchInductor directly without
     going through TorchDynamo.
     """
+    hw_classification = HardwareClassification.CPU
 
     def _clear_cpp_builder_compiler_caches(self):
         for func in (
