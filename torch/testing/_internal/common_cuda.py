@@ -75,6 +75,49 @@ SM90OrLater = LazyVal(lambda: torch.cuda.is_available() and torch.cuda.get_devic
 SM100OrLater = LazyVal(lambda: torch.cuda.is_available() and torch.cuda.get_device_capability() >= (10, 0))
 SM120OrLater = LazyVal(lambda: torch.cuda.is_available() and torch.cuda.get_device_capability() >= (12, 0))
 
+# Compute-capability range each arch-gate predicate requires, as
+# (min inclusive, max exclusive); a None max means "and later". Tooling reads this
+# statically to work out which GPU a gated test needs, without importing torch.
+#
+# This is a NECESSARY condition, not a sufficient one: several predicates also
+# require build or library support (cuSPARSELt, MSLK, a Triton with device-side
+# TMA), so a test whose capability is in range may still skip. Ranges here say
+# which hardware could possibly run the test, which is what decides the CI job it
+# belongs in.
+#
+# test_arch_ranges.py re-derives these from the predicates themselves and fails if
+# they drift, so this table cannot silently fall out of date the way a hand-copied
+# truth table would.
+GATE_ARCH_RANGES: dict[str, tuple[tuple[int, int], tuple[int, int] | None]] = {
+    "SM53OrLater": ((5, 3), None),
+    "SM60OrLater": ((6, 0), None),
+    "SM70OrLater": ((7, 0), None),
+    "SM75OrLater": ((7, 5), None),
+    "SM80OrLater": ((8, 0), None),
+    "SM89OrLater": ((8, 9), None),
+    "SM90OrLater": ((9, 0), None),
+    "SM100OrLater": ((10, 0), None),
+    "SM120OrLater": ((12, 0), None),
+    "IS_SM89": ((8, 9), (9, 0)),
+    "IS_SM90": ((9, 0), (9, 1)),
+    "IS_SM100": ((10, 0), (10, 1)),
+    "PLATFORM_SUPPORTS_BF16": ((8, 0), None),
+    "PLATFORM_SUPPORTS_FLASH_ATTENTION": ((8, 0), None),
+    "PLATFORM_SUPPORTS_MEM_EFF_ATTENTION": ((5, 0), None),
+    "PLATFORM_SUPPORTS_CUDNN_ATTENTION": ((8, 0), None),
+    "PLATFORM_SUPPORTS_FUSED_ATTENTION": ((5, 0), None),
+    "PLATFORM_SUPPORTS_FP8": ((8, 9), None),
+    "PLATFORM_SUPPORTS_FP8_GROUPED_GEMM": ((9, 0), (10, 0)),
+    "PLATFORM_SUPPORTS_MX_GEMM": ((10, 0), None),
+    "PLATFORM_SUPPORTS_MXFP8_GROUPED_GEMM": ((10, 0), (10, 1)),
+    "PLATFORM_SUPPORTS_FP8_SPARSE": ((8, 9), None),
+    # torch.utils._triton probes, gated on capability plus a Triton feature.
+    "has_triton_tma_device": ((9, 0), None),
+    "has_triton_tensor_descriptor_host_tma": ((9, 0), None),
+    "has_triton_experimental_host_tma": ((9, 0), None),
+    "has_datacenter_blackwell_tma_device": ((10, 0), (11, 0)),
+}
+
 IS_THOR = LazyVal(lambda: torch.cuda.is_available() and torch.version.cuda is not None and
                   ((torch.cuda.get_device_capability() == (11, 0) and int(torch.version.cuda[:2]) >= 13) or
                    (torch.cuda.get_device_capability() == (10, 1) and int(torch.version.cuda[:2]) < 13)))
