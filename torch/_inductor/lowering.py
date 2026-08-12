@@ -593,10 +593,11 @@ def promote_constants(
     dtype, broadcast to its size. For bf16/fp16 tensors, the scalar value is
     additionally rounded to the tensor dtype to match eager kernels that cast
     scalar operands to the common dtype: always for comparison ops
-    (override_return_dtype == torch.bool) and for callers passing
-    round_scalar_constants (e.g. remainder); on CPU and MPS only for ops
-    passing round_scalars_to_tensor_dtype (e.g. add/sub, whose CUDA eager
-    kernels keep scalars at opmath precision).
+    (override_return_dtype == torch.bool); on all devices except MPS for callers
+    passing round_scalar_constants (e.g. fmod/remainder, whose MPS eager kernels
+    keep scalars at opmath precision); and on CPU and MPS only for ops passing
+    round_scalars_to_tensor_dtype (e.g. add/sub, whose CUDA eager kernels keep
+    scalars at opmath precision).
     """
     if not (override_return_dtype is None or type_promotion_kind is None):
         raise AssertionError(
@@ -628,16 +629,14 @@ def promote_constants(
     tensor_dtype = ex.get_dtype()
 
     # Round scalars to the tensor's dtype where eager does; see docstring.
+    device_type = ex.get_device_or_error().type
     if tensor_dtype in (
         torch.bfloat16,
         torch.float16,
     ) and (
         override_return_dtype == torch.bool
-        or round_scalar_constants
-        or (
-            round_scalars_to_tensor_dtype
-            and ex.get_device_or_error().type in ("cpu", "mps")
-        )
+        or (round_scalar_constants and device_type != "mps")
+        or (round_scalars_to_tensor_dtype and device_type in ("cpu", "mps"))
     ):
         _round_scalar = lambda v: torch.tensor(v, dtype=tensor_dtype).item()  # noqa: E731
     else:
@@ -7880,6 +7879,7 @@ def div(a, b):
 
 @register_lowering([aten.fmod, prims.fmod], broadcast=True)
 def fmod(a, b):
+    a, b = promote_constants((a, b), round_scalar_constants=True)
     is_integral = is_boolean_type(a) or is_integer_type(a)
 
     if is_integral:
